@@ -1,8 +1,11 @@
-name: Build Pure AlmaLinux 10 Plasma Bootc Image
+name: Build Plasma OS Based on AlmaLinux 10 Bootc Image
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
   schedule:
     - cron: "33 20 * * *" # 每天 UTC 20:33 (对应北京时间 CST 04:33)
   workflow_dispatch:
