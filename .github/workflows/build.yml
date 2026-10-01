@@ -100,34 +100,37 @@ jobs:
           github.event_name == 'schedule' ||
           (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)
         run: |
-          mkdir -p output
-
-          # 1. 确保宿主机 storage 目录存在
+          mkdir -p output cache
           sudo mkdir -p /var/lib/containers/storage
 
-          # 2. 先在宿主机上使用 root 权限登录 GHCR 并拉取刚构建好的镜像
+          # 1. 登录并拉取构建好的本地镜像
           echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" --password-stdin
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 3. 运行 bootc-image-builder，它会直接读取上一步拉到 /var/lib/containers/storage 的本地镜像
+          # 2. 调高网络连接容错率并构建 ISO
+          # --net host: 使用宿主机网络栈，避免容器网络 NAT/DNS 引起镜像源下载断流
+          # -v $(pwd)/cache:/store: 缓存已下载的 RPM 包，避免重复下载失败
+          echo "Starting bootc-image-builder..."
           sudo podman run \
             --rm \
             --privileged \
+            --net host \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
+            -v $(pwd)/cache:/store \
             -v $(pwd)/output:/output \
             quay.io/centos-bootc/bootc-image-builder:latest \
             --type anaconda-iso \
             --rootfs ext4 \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 4. 恢复产物目录权限
+          # 3. 恢复产物目录权限
           sudo chown -R $USER:$USER output/
           
-          # 5. 移动并确认 ISO
+          # 4. 移动并确认 ISO
           mv output/bootiso/install.iso ./${{ env.ISO_NAME }}.iso
           ls -lh ./${{ env.ISO_NAME }}.iso
       
-      
+     
       
       
 
