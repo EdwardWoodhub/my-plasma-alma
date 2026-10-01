@@ -101,26 +101,24 @@ jobs:
           (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)
         run: |
           mkdir -p output
-          
-          # 1. 确保宿主机 root storage 目录存在并完成驱动初始化
+
+          # 1. 确保宿主机 storage 目录存在
           sudo mkdir -p /var/lib/containers/storage
-          sudo podman system info > /dev/null 2>&1 || true
 
-          # 2. 生成认证文件
-          mkdir -p /tmp/auth
-          echo '{"auths":{"ghcr.io":{"auth":"'$(echo -n "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" | base64 -w 0)'"}}}' > /tmp/auth/config.json
+          # 2. 先在宿主机上使用 root 权限登录 GHCR 并拉取刚构建好的镜像
+          echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" --password-stdin
+          sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 3. 挂载宿主机的 root storage 以及认证文件运行
+          # 3. 运行 bootc-image-builder，它会直接读取上一步拉到 /var/lib/containers/storage 的本地镜像
           sudo podman run \
             --rm \
             --privileged \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
-            -v /tmp/auth/config.json:/run/containers/0/auth.json:ro \
             -v $(pwd)/output:/output \
             quay.io/centos-bootc/bootc-image-builder:latest \
             --type anaconda-iso \
             --rootfs ext4 \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
           # 4. 恢复产物目录权限
           sudo chown -R $USER:$USER output/
