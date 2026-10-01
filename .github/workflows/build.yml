@@ -7,7 +7,7 @@ on:
     paths-ignore:
       - "**.md"
   schedule:
-    - cron: "33 20 * * *" # 每天 UTC 20:33 (对应北京时间 CST 04:33)
+    - cron: "33 20 * * *" # 每天 UTC 20:33 (对应北京时间 CST 04:33)[cite: 1]
   workflow_dispatch:
     inputs:
       build_iso:
@@ -25,16 +25,16 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write # Cosign 签名必需权限
+      id-token: write # Cosign 签名必需权限[cite: 1]
 
     steps:
       - name: Maximize build space
-        uses: ublue-os/remove-unwanted-software@v7
+        uses: ublue-os/remove-unwanted-software@v7[cite: 1]
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4[cite: 1]
 
-      # 将 GitHub 用户名/组织名强制转换为纯小写，防止 Podman 推送因大写字符报错
+      # 将 GitHub 用户名/组织名强制转换为纯小写，防止 Podman 推送因大写字符报错[cite: 1]
       - name: Set lower case registry name
         id: registry_case
         run: |
@@ -43,7 +43,7 @@ jobs:
           echo "ACTOR_LOWER=${ACTOR_LOWER}" >> $GITHUB_ENV
 
       - name: Install Cosign (Sigstore)
-        uses: sigstore/cosign-installer@v3.5.0
+        uses: sigstore/cosign-installer@v3.5.0[cite: 1]
 
       # 安装 ORAS CLI 用于将 ISO 作为 OCI Artifact Blob 推送到镜像仓库
       - name: Install ORAS CLI
@@ -51,84 +51,83 @@ jobs:
         with:
           version: 1.2.0
 
-      # 使用原生支持重试的 skopeo 将大体积基础镜像直接同步至 Podman 本地存储，避免 Quay.io CDN 偶发断流
+      # 使用标准 Bash 循环重试机制拉取基础镜像，不依赖可能因版本缺失的 CLI 重试参数
       - name: Pre-pull Base Image with Retries
         run: |
-          echo "Pulling base image: ${{ env.BASE_IMAGE }} with auto-retry..."
-          for i in {1..5}; do
+          echo "Pulling base image: ${{ env.BASE_IMAGE }}..."
+          SUCCESS=false
+          for i in {1..6}; do
             echo "Attempt $i..."
-            if skopeo copy \
-              --retry-times 5 \
-              --retry-delay 5s \
-              docker://${{ env.BASE_IMAGE }} \
-              containers-storage:${{ env.BASE_IMAGE }}; then
+            if podman pull "${{ env.BASE_IMAGE }}"; then
               echo "Base image pulled successfully."
+              SUCCESS=true
               break
             fi
-            echo "Pull failed on attempt $i, retrying in 10s..."
-            sleep 10
-            if [ $i -eq 5 ]; then
-              echo "Failed to pull base image after 5 attempts."
-              exit 1
-            fi
+            echo "Pull failed on attempt $i, retrying in 15s..."
+            sleep 15
           done
 
+          if [ "$SUCCESS" = false ]; then
+            echo "Failed to pull base image after multiple attempts."
+            exit 1
+          fi
+
       - name: Log into GitHub Container Registry
-        uses: redhat-actions/podman-login@v1
+        uses: redhat-actions/podman-login@v1[cite: 1]
         with:
-          registry: ghcr.io
-          username: ${{ env.ACTOR_LOWER }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io[cite: 1]
+          username: ${{ env.ACTOR_LOWER }}[cite: 1]
+          password: ${{ secrets.GITHUB_TOKEN }}[cite: 1]
 
       - name: Build image using Buildah
         id: build-image
-        uses: redhat-actions/buildah-build@v2
+        uses: redhat-actions/buildah-build@v2[cite: 1]
         with:
-          image: ${{ env.IMAGE_NAME }}
-          tags: latest
+          image: ${{ env.IMAGE_NAME }}[cite: 1]
+          tags: latest[cite: 1]
           containerfiles: |
             ./Containerfile
 
       - name: Push to GHCR
         id: push-to-ghcr
-        uses: redhat-actions/push-to-registry@v2
+        uses: redhat-actions/push-to-registry@v2[cite: 1]
         with:
-          image: ${{ env.IMAGE_NAME }}
-          tags: latest
-          registry: ${{ env.REGISTRY }}
+          image: ${{ env.IMAGE_NAME }}[cite: 1]
+          tags: latest[cite: 1]
+          registry: ${{ env.REGISTRY }}[cite: 1]
 
       - name: Sign image with Cosign
         env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}[cite: 1]
         run: |
           cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"[cite: 1]
 
       # =========================================================================
       # 1. 登录阿里云 ACR
       # =========================================================================
       - name: Log in to Aliyun ACR
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-        uses: redhat-actions/podman-login@v1
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'[cite: 1]
+        uses: redhat-actions/podman-login@v1[cite: 1]
         with:
-          registry: ${{ secrets.ALIYUN_ACR_REGISTRY }}
-          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
-          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+          registry: ${{ secrets.ALIYUN_ACR_REGISTRY }}[cite: 1]
+          username: ${{ secrets.ALIYUN_ACR_USERNAME }}[cite: 1]
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}[cite: 1]
 
       # =========================================================================
       # 2. 同步容器镜像到阿里云 ACR
       # =========================================================================
       - name: Sync OCI Image from GHCR to Aliyun ACR
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'[cite: 1]
         run: |
-          echo "Syncing ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."
+          echo "Syncing ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."[cite: 1]
           skopeo copy \
             --src-creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
             --dest-creds "${{ secrets.ALIYUN_ACR_USERNAME }}:${{ secrets.ALIYUN_ACR_PASSWORD }}" \
             --dest-compress-format gzip \
             --format v2s2 \
             docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
+            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest[cite: 1]
 
       # =========================================================================
       # 3. 使用 bootc-image-builder 构建 Live/安装 ISO
