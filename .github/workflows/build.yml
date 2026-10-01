@@ -100,37 +100,44 @@ jobs:
           github.event_name == 'schedule' ||
           (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)
         run: |
-          mkdir -p output cache
+          mkdir -p output
           sudo mkdir -p /var/lib/containers/storage
 
           # 1. 登录并拉取构建好的本地镜像
           echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" --password-stdin
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 2. 调高网络连接容错率并构建 ISO
-          # --net host: 使用宿主机网络栈，避免容器网络 NAT/DNS 引起镜像源下载断流
-          # -v $(pwd)/cache:/store: 缓存已下载的 RPM 包，避免重复下载失败
+          # 2. 生成基于 bootc 原生的引导/安装 ISO
+          # 使用 --type iso 替代 anaconda-iso，无需联网解析旧 RPM 仓库依赖
           echo "Starting bootc-image-builder..."
           sudo podman run \
             --rm \
             --privileged \
             --net host \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
-            -v $(pwd)/cache:/store \
             -v $(pwd)/output:/output \
             quay.io/centos-bootc/bootc-image-builder:latest \
-            --type anaconda-iso \
+            --type iso \
             --rootfs ext4 \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
           # 3. 恢复产物目录权限
           sudo chown -R $USER:$USER output/
           
-          # 4. 移动并确认 ISO
-          mv output/bootiso/install.iso ./${{ env.ISO_NAME }}.iso
+          # 4. 移动并确认 ISO (bootc 原生 ISO 产物路径在 output/bootiso/install.iso 或 output/image/boot.iso)
+          if [ -f output/bootiso/install.iso ]; then
+            mv output/bootiso/install.iso ./${{ env.ISO_NAME }}.iso
+          elif [ -f output/image/boot.iso ]; then
+            mv output/image/boot.iso ./${{ env.ISO_NAME }}.iso
+          elif [ -f output/boot.iso ]; then
+            mv output/boot.iso ./${{ env.ISO_NAME }}.iso
+          else
+            find output -name "*.iso" -exec mv {} ./${{ env.ISO_NAME }}.iso \;
+          fi
+
           ls -lh ./${{ env.ISO_NAME }}.iso
       
-     
+      
       
       
 
