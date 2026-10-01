@@ -102,15 +102,19 @@ jobs:
         run: |
           mkdir -p output
           
-          # 生成 GHCR 认证配置文件
+          # 1. 确保宿主机 root storage 目录存在并完成驱动初始化
+          sudo mkdir -p /var/lib/containers/storage
+          sudo podman system info > /dev/null 2>&1 || true
+
+          # 2. 生成认证文件
           mkdir -p /tmp/auth
           echo '{"auths":{"ghcr.io":{"auth":"'$(echo -n "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" | base64 -w 0)'"}}}' > /tmp/auth/config.json
 
-          # 挂载认证文件至容器内的标准路径 /run/containers/0/auth.json
-          # 并移除不支持的 --authfile 参数
+          # 3. 挂载宿主机的 root storage 以及认证文件运行
           sudo podman run \
             --rm \
             --privileged \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
             -v /tmp/auth/config.json:/run/containers/0/auth.json:ro \
             -v $(pwd)/output:/output \
             quay.io/centos-bootc/bootc-image-builder:latest \
@@ -118,10 +122,10 @@ jobs:
             --rootfs ext4 \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-          # 恢复产物目录权限
+          # 4. 恢复产物目录权限
           sudo chown -R $USER:$USER output/
           
-          # 移动并检查 ISO 文件
+          # 5. 移动并确认 ISO
           mv output/bootiso/install.iso ./${{ env.ISO_NAME }}.iso
           ls -lh ./${{ env.ISO_NAME }}.iso
       
