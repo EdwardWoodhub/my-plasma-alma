@@ -102,20 +102,30 @@ jobs:
         run: |
           mkdir -p output
           
-          # 针对 AlmaLinux 10 / bootc 标准打包为 anaconda 可引导安装/Live ISO
-          podman run \
+          # 创建用于 bootc-image-builder 访问 GHCR 的认证文件
+          mkdir -p /tmp/auth
+          echo '{"auths":{"ghcr.io":{"auth":"'$(echo -n "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" | base64 -w 0)'"}}}' > /tmp/auth/config.json
+
+          # 使用 sudo 避免 /var/lib/containers/storage 权限问题
+          # 直接指定从 GHCR 远程镜像拉取（避免本地 rootless 存储不一致）
+          sudo podman run \
             --rm \
             --privileged \
-            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            -v /tmp/auth/config.json:/auth.json:ro \
             -v $(pwd)/output:/output \
             quay.io/centos-bootc/bootc-image-builder:latest \
             --type anaconda-iso \
-            --local \
-            ${{ env.IMAGE_NAME }}:latest
+            --authfile /auth.json \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+          # 修正生成文件的权限（因为容器内是 root 创建的）
+          sudo chown -R $USER:$USER output/
           
-          # 重命名并移动 ISO
+          # 移动并检查 ISO 文件
           mv output/bootiso/install.iso ./${{ env.ISO_NAME }}.iso
           ls -lh ./${{ env.ISO_NAME }}.iso
+      
+      
 
       # -----------------------------------------------------------------------
       # 4. 生成校验和与 ISO 分卷 (防止超单文件上限 & 适配 Releases)
