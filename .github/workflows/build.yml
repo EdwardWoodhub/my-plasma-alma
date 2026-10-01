@@ -51,13 +51,17 @@ jobs:
         with:
           version: 1.2.0
 
-      # 预拉取基础镜像并配置多重重试机制，解决 Quay.io S3 CDN 偶发断流 (unexpected EOF 125) 问题
+      # 使用原生支持重试的 skopeo 将大体积基础镜像直接同步至 Podman 本地存储，避免 Quay.io CDN 偶发断流
       - name: Pre-pull Base Image with Retries
         run: |
           echo "Pulling base image: ${{ env.BASE_IMAGE }} with auto-retry..."
           for i in {1..5}; do
             echo "Attempt $i..."
-            if podman pull --retry 5 --retry-delay 5s "${{ env.BASE_IMAGE }}"; then
+            if skopeo copy \
+              --retry-times 5 \
+              --retry-delay 5s \
+              docker://${{ env.BASE_IMAGE }} \
+              containers-storage:${{ env.BASE_IMAGE }}; then
               echo "Base image pulled successfully."
               break
             fi
@@ -84,9 +88,6 @@ jobs:
           tags: latest
           containerfiles: |
             ./Containerfile
-          extra-args: |
-            --retry=5
-            --retry-delay=5s
 
       - name: Push to GHCR
         id: push-to-ghcr
@@ -137,7 +138,7 @@ jobs:
         run: |
           mkdir -p output
           
-          # bootc-image-builder 挂载本地 Podman 存储，复用刚构建出的最新镜像
+          # bootc-image-builder 挂载本地 Podman 存储，直接使用刚构建出的镜像
           sudo podman run \
             --rm \
             -i \
