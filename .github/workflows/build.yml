@@ -17,6 +17,7 @@ on:
 
 env:
   IMAGE_NAME: my-plasma-alma-vm
+  BASE_IMAGE: quay.io/almalinuxorg/almalinux-bootc:10
 
 jobs:
   build:
@@ -44,11 +45,29 @@ jobs:
       - name: Install Cosign (Sigstore)
         uses: sigstore/cosign-installer@v3.5.0
 
-      # 安装 ORAS (用于将 ISO 作为 OCI Artifact Blob 推送至镜像仓库)
+      # 安装 ORAS CLI 用于将 ISO 作为 OCI Artifact Blob 推送到镜像仓库
       - name: Install ORAS CLI
         uses: oras-project/setup-oras@v1
         with:
           version: 1.2.0
+
+      # 预拉取基础镜像并配置多重重试机制，解决 Quay.io S3 CDN 偶发断流 (unexpected EOF 125) 问题
+      - name: Pre-pull Base Image with Retries
+        run: |
+          echo "Pulling base image: ${{ env.BASE_IMAGE }} with auto-retry..."
+          for i in {1..5}; do
+            echo "Attempt $i..."
+            if podman pull --retry 5 --retry-delay 5s "${{ env.BASE_IMAGE }}"; then
+              echo "Base image pulled successfully."
+              break
+            fi
+            echo "Pull failed on attempt $i, retrying in 10s..."
+            sleep 10
+            if [ $i -eq 5 ]; then
+              echo "Failed to pull base image after 5 attempts."
+              exit 1
+            fi
+          done
 
       - name: Log into GitHub Container Registry
         uses: redhat-actions/podman-login@v1
@@ -65,6 +84,9 @@ jobs:
           tags: latest
           containerfiles: |
             ./Containerfile
+          extra-args: |
+            --retry=5
+            --retry-delay=5s
 
       - name: Push to GHCR
         id: push-to-ghcr
@@ -108,17 +130,17 @@ jobs:
             docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
 
       # =========================================================================
-      # 3. 使用 bootc-image-builder 构建 Live/Installer ISO
+      # 3. 使用 bootc-image-builder 构建 Live/安装 ISO
       # =========================================================================
       - name: Build bootc ISO
         if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
         run: |
           mkdir -p output
           
-          # bootc-image-builder 需要特权容器并挂载 /dev 与 /sys
+          # bootc-image-builder 挂载本地 Podman 存储，复用刚构建出的最新镜像
           sudo podman run \
             --rm \
-            -it \
+            -i \
             --privileged \
             --pull=newer \
             -v ./output:/output \
@@ -128,18 +150,17 @@ jobs:
             --local \
             ${{ env.IMAGE_NAME }}:latest
 
-          # 规范重命名 ISO 文件
+          # 修正权限并规范重命名 ISO
           sudo chown -R $USER:$USER output/
           mv output/bootiso/install.iso ./${{ env.IMAGE_NAME }}.iso
           ls -lh ./${{ env.IMAGE_NAME }}.iso
 
       # =========================================================================
-      # 4. 使用 ORAS 将 ISO 作为 OCI Artifact 推送到 GHCR
+      # 4. 使用 ORAS 将 ISO Blob 推送到 GHCR
       # =========================================================================
       - name: Push ISO Artifact to GHCR
         if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
         run: |
-          # 登录 ORAS 到 GHCR
           echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ env.ACTOR_LOWER }}" --password-stdin
 
           echo "Pushing ISO to GHCR..."
@@ -149,12 +170,11 @@ jobs:
             ./${{ env.IMAGE_NAME }}.iso:application/vnd.efi.iso
 
       # =========================================================================
-      # 5. 使用 ORAS 将 ISO 作为 OCI Artifact 推送到 阿里云 ACR
+      # 5. 使用 ORAS 将 ISO Blob 推送到 阿里云 ACR
       # =========================================================================
       - name: Push ISO Artifact to Aliyun ACR
         if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.build_iso == true) || github.event_name == 'schedule'
         run: |
-          # 登录 ORAS 到 阿里云 ACR
           echo "${{ secrets.ALIYUN_ACR_PASSWORD }}" | oras login "${{ secrets.ALIYUN_ACR_REGISTRY }}" -u "${{ secrets.ALIYUN_ACR_USERNAME }}" --password-stdin
 
           echo "Pushing ISO to Aliyun ACR..."
