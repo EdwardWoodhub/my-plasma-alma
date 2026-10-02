@@ -112,6 +112,7 @@ jobs:
             docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
             docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
 
+      
       # =========================================================================
       # 3. 构建 Bootc LiveISO (Anaconda ISO)
       # =========================================================================
@@ -122,14 +123,22 @@ jobs:
           (github.event_name == 'workflow_dispatch' && inputs.build_iso == true)
         run: |
           mkdir -p output
-          
-          # 使用 centos-bootc 官方 image-builder 基于刚推送到 GHCR 的镜像生成 ISO
+
+          # 确保容器存储目录存在
+          sudo mkdir -p /var/lib/containers/storage
+
+          # 运行 bootc-image-builder
+          # 1. 移除 -it，改用非交互模式
+          # 2. 挂载 /var/lib/containers/storage
+          # 3. 挂载认证文件，确保能拉取刚推送到 GHCR 的镜像
           sudo podman run \
             --rm \
-            -it \
             --privileged \
             --pull=newer \
+            --security-opt label=type:unconfined_t \
             -v ./output:/output \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            -v $XDG_RUNTIME_DIR/containers/auth.json:/run/containers/0/auth.json:ro \
             quay.io/centos-bootc/bootc-image-builder:latest \
             --type anaconda-iso \
             --tls-verify=false \
@@ -139,6 +148,8 @@ jobs:
           ISO_FILE=$(find output -name "*.iso" | head -n 1)
           sudo mv "$ISO_FILE" ./output/${{ env.IMAGE_NAME }}.iso
           sudo chown -R $USER:$USER output/
+      
+      
 
       # =========================================================================
       # 4. 生成校验和并进行分卷切割 (处理大文件)
