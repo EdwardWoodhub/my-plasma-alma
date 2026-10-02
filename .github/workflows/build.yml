@@ -139,21 +139,42 @@ jobs:
           }
           EOF
 
-          # 4. 运行构建器
-          echo "Running bootc-image-builder..."
-          sudo podman run \
-            --rm \
-            --privileged \
-            --net=host \
-            --security-opt label=type:unconfined_t \
-            -v ./output:/output \
-            -v ./config.json:/config.json:ro \
-            -v /var/lib/containers/storage:/var/lib/containers/storage \
-            quay.io/centos-bootc/bootc-image-builder:latest \
-            --config /config.json \
-            --type anaconda-iso \
-            --rootfs ext4 \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          # 4. 运行构建器（带重试机制，应对 quay.io CDN 临时抖动）
+          echo "Running bootc-image-builder... (with retry)"
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          BUILD_SUCCESS=false
+
+          while [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ] && [ "$BUILD_SUCCESS" = "false" ]; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "=== Attempt $RETRY_COUNT of $MAX_RETRIES ==="
+
+            if sudo podman run \
+              --rm \
+              --privileged \
+              --net=host \
+              --security-opt label=type:unconfined_t \
+              -v ./output:/output \
+              -v ./config.json:/config.json:ro \
+              -v /var/lib/containers/storage:/var/lib/containers/storage \
+              quay.io/centos-bootc/bootc-image-builder:latest \
+              --config /config.json \
+              --type anaconda-iso \
+              --rootfs ext4 \
+              "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"; then
+              BUILD_SUCCESS=true
+            else
+              echo "WARNING: bootc-image-builder failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
+              if [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ]; then
+                WAIT_TIME=$((RETRY_COUNT * 30))
+                echo "Waiting $WAIT_TIME seconds before retry..."
+                sleep "$WAIT_TIME"
+              else
+                echo "ERROR: bootc-image-builder failed after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            fi
+          done
 
           # 5. 提取生成的 ISO 并重命名
           ISO_FILE=$(find output -name "*.iso" 2>/dev/null | head -n 1)
