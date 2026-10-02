@@ -322,17 +322,28 @@ jobs:
           fi
           sha256sum "${{ env.ISO_FILE_NAME }}.iso" > "${{ env.ISO_FILE_NAME }}.iso.sha256"
 
-      - name: Publish ISO to GitHub Releases
+      - name: Publish ISO (small file) to GitHub Releases
         uses: softprops/action-gh-release@v2
-        if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
+        if: (github.event_name != 'workflow_dispatch' || inputs.build_iso == true) && env.ISO_SPLIT != 'true'
         with:
           files: |
             ${{ env.ISO_FILE_NAME }}.iso.sha256
             ${{ env.ISO_FILE_NAME }}.iso
+          tag_name: release-${{ github.run_number }}
+          name: "Live ISO Build #${{ github.run_number }}"
+          generate_release_notes: true
+
+      - name: Publish ISO Parts (large file) to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        if: (github.event_name != 'workflow_dispatch' || inputs.build_iso == true) && env.ISO_SPLIT == 'true'
+        with:
+          files: |
+            ${{ env.ISO_FILE_NAME }}.iso.sha256
             ${{ env.ISO_FILE_NAME }}.iso.part-*
           tag_name: release-${{ github.run_number }}
           name: "Live ISO Build #${{ github.run_number }}"
           generate_release_notes: true
+
 
       # =========================================================================
       # 6. 将 ISO 封装为独立容器镜像并推送到 GHCR
@@ -388,3 +399,18 @@ jobs:
             --format v2s2 \
             docker://${{ env.REGISTRY }}/${{ env.ISO_IMAGE_NAME }}:latest \
             docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.ISO_IMAGE_NAME }}:latest
+      # =========================================================================
+      # 8. 清理 podman 认证文件权限（修复 logout 权限错误）
+      # =========================================================================
+      - name: Cleanup podman auth permissions
+        if: always()
+        run: |
+          echo "=== Cleaning up podman auth permissions ==="
+          # 修复 /run/user/XXX/containers/ 权限（sudo podman login 创建的 root 文件）
+          sudo chown -R $USER:$USER /run/user/$(id -u)/containers 2>/dev/null || true
+          sudo chown -R $USER:$USER /home/runner/.config/containers 2>/dev/null || true
+          # 静默退出（即使失败也不影响流水线状态）
+          podman logout ghcr.io 2>/dev/null || true
+          podman logout ${{ secrets.ALIYUN_ACR_REGISTRY }} 2>/dev/null || true
+          echo "=== Cleanup complete ==="
+
