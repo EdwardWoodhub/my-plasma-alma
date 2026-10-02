@@ -421,7 +421,7 @@ jobs:
           fi
 
           echo "OS image synced to ${ACR_IMG} successfully"
-- name: Sync ISO Container Image to Aliyun ACR
+      - name: Sync ISO Container Image to Aliyun ACR
         if: (steps.push-to-ghcr.outcome == 'success') && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
           echo "Syncing ISO container image to Aliyun ACR..."
@@ -466,7 +466,7 @@ jobs:
           fi
 
           echo "ISO container image synced to ${ACR_IMG} successfully"
-- name: Cleanup podman auth permissions
+      - name: Cleanup podman auth permissions
         if: always()
         run: |
           set +e
