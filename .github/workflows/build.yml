@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths-ignore:
-      - "**.md"  
+      - "**.md"
   schedule:
     - cron: "28 20 * * *" # 每天 UTC 20:28 (北京时间 CST 04:28)
   workflow_dispatch:
@@ -112,10 +112,24 @@ jobs:
           echo "Pulling base image to local podman storage..."
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 3. 写入仓库配置，提供稳定官方源地址
-          # 3. 使用 printf 写入仓库配置（不包含 check_gpg 字段）
-          printf '{\n  "customizations": {\n    "repositories": [\n      {\n        "id": "baseos",\n        "baseurls": ["https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/"]\n      },\n      {\n        "id": "appstream",\n        "baseurls": ["https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/"]\n      }\n    ]\n  }\n}\n' > config.json
-          
+          # 3. 使用 Heredoc 写入仓库配置（避免 printf 转义错误）
+          # 注意：此处使用了阿里云镜像源以提升构建速度和稳定性
+          cat > config.json << 'EOF'
+          {
+            "customizations": {
+              "repositories": [
+                {
+                  "id": "baseos",
+                  "baseurls": ["https://mirrors.aliyun.com/almalinux/10/BaseOS/x86_64/os/"]
+                },
+                {
+                  "id": "appstream",
+                  "baseurls": ["https://mirrors.aliyun.com/almalinux/10/AppStream/x86_64/os/"]
+                }
+              ]
+            }
+          }
+          EOF
 
           # 4. 运行构建器
           echo "Running bootc-image-builder..."
@@ -142,7 +156,8 @@ jobs:
 
           echo "Found ISO: $ISO_FILE"
           sudo mv "$ISO_FILE" "./${{ env.ISO_FILE_NAME }}.iso"
-          sudo chown -R $USER:$USER "./${{ env.ISO_FILE_NAME }}.iso"
+          # 确保当前用户有权读取该文件用于后续步骤
+          chmod 644 "./${{ env.ISO_FILE_NAME }}.iso"
           ls -lh "${{ env.ISO_FILE_NAME }}.iso"
 
       # =========================================================================
@@ -151,7 +166,15 @@ jobs:
       - name: Split ISO & Generate Checksum
         if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
         run: |
-          split -b 1800M "${{ env.ISO_FILE_NAME }}.iso" "${{ env.ISO_FILE_NAME }}.iso.part-"
+          ISO_SIZE=$(stat -c%s "${{ env.ISO_FILE_NAME }}.iso" 2>/dev/null || echo 0)
+          # 如果文件大于 1800MB，则切割；否则直接上传原文件
+          if [ "$ISO_SIZE" -gt 1887436800 ]; then
+            split -b 1800M "${{ env.ISO_FILE_NAME }}.iso" "${{ env.ISO_FILE_NAME }}.iso.part-"
+            echo "ISO_SPLIT=true" >> $GITHUB_ENV
+          else
+            echo "ISO file size (${ISO_SIZE} bytes) is under 1800MB, skipping split."
+            echo "ISO_SPLIT=false" >> $GITHUB_ENV
+          fi
           sha256sum "${{ env.ISO_FILE_NAME }}.iso" > "${{ env.ISO_FILE_NAME }}.iso.sha256"
 
       - name: Publish ISO to GitHub Releases
@@ -159,8 +182,9 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
         with:
           files: |
-            ${{ env.ISO_FILE_NAME }}.iso.part-*
             ${{ env.ISO_FILE_NAME }}.iso.sha256
+            ${{ env.ISO_FILE_NAME }}.iso
+            ${{ env.ISO_FILE_NAME }}.iso.part-*
           tag_name: release-${{ github.run_number }}
           name: "Live ISO Build #${{ github.run_number }}"
           generate_release_notes: true
@@ -197,10 +221,7 @@ jobs:
       # 7. 统一同步镜像到阿里云 ACR（保留在流水线最后）
       # =========================================================================
       - name: Sync OS Image to Aliyun ACR
-        if: |
-          always() &&
-          steps.push-to-ghcr.conclusion == 'success' &&
-          ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+        if: steps.push-to-ghcr.outcome == 'success' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
           echo "Syncing OS image ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."
           skopeo copy \
@@ -212,9 +233,7 @@ jobs:
             docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
 
       - name: Sync ISO Container Image to Aliyun ACR
-        if: |
-          (github.event_name != 'workflow_dispatch' || inputs.build_iso == true) &&
-          ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+        if: (steps.push-to-ghcr.outcome == 'success') && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
           echo "Syncing ISO container image to Aliyun ACR via skopeo..."
           skopeo copy \
