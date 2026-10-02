@@ -348,17 +348,14 @@ jobs:
       # =========================================================================
       # 6. 将 ISO 封装为同一 Package 下的 live-iso Tag 并推送到 GHCR 和 阿里云 ACR
       # =========================================================================
-      - name: Package ISO into Container Image & Push
+      - name: Package ISO into Container Image & Push to Registries
         if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
         run: |
           # 1. 修复之前 sudo 执行命令残留的权限锁定问题
           sudo chown -R $USER:$USER /run/user/$(id -u)/containers 2>/dev/null || true
           sudo chown -R $USER:$USER /home/runner/.config/containers 2>/dev/null || true
 
-          # 2. 重新用当前用户登录 GHCR，确保认证文件有效
-          podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" -p "${{ secrets.GITHUB_TOKEN }}"
-
-          echo "Creating containerfile for ISO packaging..."
+          # 2. 准备 Dockerfile 并构建本地镜像
           cat << EOF > Containerfile.iso
           FROM scratch
           COPY ${{ env.ISO_FILE_NAME }}.iso /${{ env.ISO_FILE_NAME }}.iso
@@ -367,30 +364,26 @@ jobs:
           echo "Building ISO container image with Podman..."
           podman build -t "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:live-iso" -f Containerfile.iso .
 
-          echo "Pushing ISO container image to GHCR..."
-          podman push \
-            --creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:live-iso"
+          # 3. 登录并推送到 GHCR
+          echo "Pushing ISO to GHCR..."
+          podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" -p "${{ secrets.GITHUB_TOKEN }}"
+          podman push "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:live-iso"
 
-      - name: Sync ISO Container Image to Aliyun ACR
-        if: |
-          (github.event_name != 'workflow_dispatch' || inputs.build_iso == true) &&
-          ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
-        run: |
-          echo "Logging into Aliyun ACR via podman..."
-          podman login ${{ secrets.ALIYUN_ACR_REGISTRY }} \
-            -u "${{ secrets.ALIYUN_ACR_USERNAME }}" \
-            -p "${{ secrets.ALIYUN_ACR_PASSWORD }}"
+          # 4. 判断事件类型，登录并推送到 阿里云 ACR
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ] || ([ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]); then
+            echo "Pushing ISO directly to Aliyun ACR..."
+            podman login "${{ secrets.ALIYUN_ACR_REGISTRY }}" \
+              -u "${{ secrets.ALIYUN_ACR_USERNAME }}" \
+              -p "${{ secrets.ALIYUN_ACR_PASSWORD }}"
 
-          echo "Tagging ISO image for ACR..."
-          podman tag \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:live-iso" \
-            "${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:live-iso"
+            podman tag \
+              "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:live-iso" \
+              "${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:live-iso"
 
-          echo "Pushing ISO image directly to Aliyun ACR..."
-          podman push "${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:live-iso"
+            podman push "${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:live-iso"
+          fi
       
-      
+        
       
       
       
