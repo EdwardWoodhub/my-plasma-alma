@@ -113,30 +113,9 @@ jobs:
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
           # 3. 写入仓库配置，提供稳定官方源地址
-          cat << 'EOF' > config.json
-          {
-            "customizations": {
-              "repositories": [
-                {
-                  "id": "baseos",
-                  "name": "baseos",
-                  "baseurls": [
-                    "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/"
-                  ],
-                  "check_gpg": false
-                },
-                {
-                  "id": "appstream",
-                  "name": "appstream",
-                  "baseurls": [
-                    "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/"
-                  ],
-                  "check_gpg": false
-                }
-              ]
-            }
-          }
-          EOF
+          # 3. 使用 printf 写入仓库配置（不包含 check_gpg 字段）
+          printf '{\n  "customizations": {\n    "repositories": [\n      {\n        "id": "baseos",\n        "baseurls": ["https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/"]\n      },\n      {\n        "id": "appstream",\n        "baseurls": ["https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/"]\n      }\n    ]\n  }\n}\n' > config.json
+          
 
           # 4. 运行构建器
           echo "Running bootc-image-builder..."
