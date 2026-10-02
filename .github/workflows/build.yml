@@ -10,8 +10,8 @@ on:
     - cron: "33 20 * * *" # 每天 UTC 20:33 (对应北京时间 CST 04:33)
   workflow_dispatch:
     inputs:
-      build_iso:
-        description: '是否构建并发布 LiveISO'
+      release_iso:
+        description: "是否发布 LiveISO 到 Release 及推送 Blob"
         required: true
         type: boolean
         default: true
@@ -37,6 +37,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install build tools (xorriso, mksquashfs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso squashfs-tools mtools dosfstools
+
       - name: Set lower case registry name & dynamic tags
         id: vars
         run: |
@@ -44,7 +49,6 @@ jobs:
           echo "REGISTRY=ghcr.io/${ACTOR_LOWER}" >> $GITHUB_ENV
           echo "ACTOR_LOWER=${ACTOR_LOWER}" >> $GITHUB_ENV
           
-          # 生成唯一的发布标签和构建时间戳
           RELEASE_TAG="live-$(date +'%Y%m%d-%H%M%S')"
           echo "RELEASE_TAG=${RELEASE_TAG}" >> $GITHUB_ENV
           echo "tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
@@ -113,44 +117,66 @@ jobs:
             docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
 
       # =========================================================================
-      # 3. 构建 Bootc LiveISO (Anaconda ISO)
+      # 3. 制作原生免安装 Plasma LiveCD ISO (不依赖外部 RPM 下载)
       # =========================================================================
-      - name: Build Live ISO with bootc-image-builder
+      - name: Generate Native Plasma LiveCD ISO
         if: |
           github.event_name == 'push' ||
           github.event_name == 'schedule' ||
-          (github.event_name == 'workflow_dispatch' && inputs.build_iso == true)
+          (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)
         run: |
           mkdir -p output
+          WORKDIR=$(pwd)/live_workspace
+          mkdir -p ${WORKDIR}/{rootfs,iso/LiveOS,iso/isolinux,iso/EFI/BOOT}
+          
+          echo "=== 1. 从构建好的本地镜像中导出 Rootfs ==="
+          CONTAINER_ID=$(podman create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest)
+          podman export ${CONTAINER_ID} | tar -x -C ${WORKDIR}/rootfs/
+          podman rm ${CONTAINER_ID}
 
-          echo "=== 1. 让 root 环境登录 GHCR ==="
-          sudo podman login ghcr.io \
-            -u "${{ env.ACTOR_LOWER }}" \
-            -p "${{ secrets.GITHUB_TOKEN }}"
+          echo "=== 2. 提取内核、引导程序及 initrd ==="
+          # 提取内核与 initramfs (使用通配符适配最新内核版本)
+          VMLINUZ=$(ls ${WORKDIR}/rootfs/boot/vmlinuz-* | head -n 1)
+          INITRAMFS=$(ls ${WORKDIR}/rootfs/boot/initramfs-*.img | head -n 1)
+          
+          cp "${VMLINUZ}" ${WORKDIR}/iso/isolinux/vmlinuz
+          cp "${INITRAMFS}" ${WORKDIR}/iso/isolinux/initrd.img
 
-          echo "=== 2. 提前拉取目标镜像到 root 容器存储库 ==="
-          # 满足 bootc-image-builder 要求：镜像必须先存在于本地容器存储中
-          sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          # 提取 UEFI 引导文件 (shim/grub)
+          cp ${WORKDIR}/rootfs/boot/efi/EFI/*/shimx64.efi ${WORKDIR}/iso/EFI/BOOT/BOOTX64.EFI 2>/dev/null || cp ${WORKDIR}/rootfs/usr/share/shim/*/shimx64.efi ${WORKDIR}/iso/EFI/BOOT/BOOTX64.EFI || true
+          cp ${WORKDIR}/rootfs/boot/efi/EFI/*/grubx64.efi ${WORKDIR}/iso/EFI/BOOT/grubx64.efi 2>/dev/null || cp ${WORKDIR}/rootfs/usr/share/grub2/x86_64-efi/grub.efi ${WORKDIR}/iso/EFI/BOOT/grubx64.efi || true
 
-          echo "=== 3. 运行 bootc-image-builder 生成 ISO ==="
-          sudo podman run \
-            --rm \
-            --privileged \
-            --pull=newer \
-            --security-opt label=type:unconfined_t \
-            -v ./output:/output \
-            -v /var/lib/containers/storage:/var/lib/containers/storage \
-            quay.io/centos-bootc/bootc-image-builder:latest \
-            --type anaconda-iso \
-            --local \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          echo "=== 3. 写入 GRUB 启动配置 (直入 Plasma 桌面) ==="
+          cat << 'EOF' > ${WORKDIR}/iso/EFI/BOOT/grub.cfg
+          set default="0"
+          set timeout=5
 
-          # 规范重命名 ISO 并修正文件所有权
-          ISO_FILE=$(find output -name "*.iso" | head -n 1)
-          sudo mv "$ISO_FILE" ./output/${{ env.IMAGE_NAME }}.iso
-          sudo chown -R $USER:$USER output/
-      
-      
+          menuentry "Start AlmaLinux 10 Plasma Live" --class fedora --class gnu-linux --class gnu --class os {
+              linux /isolinux/vmlinuz root=live:CDLABEL=ALMA_LIVE rd.live.image quiet rhgb splash
+              initrd /isolinux/initrd.img
+          }
+          EOF
+
+          echo "=== 4. 将 Rootfs 打包为 LiveOS Squashfs 镜像 ==="
+          # 去除宿主机缓存目录减小体积
+          sudo rm -rf ${WORKDIR}/rootfs/var/cache/* ${WORKDIR}/rootfs/tmp/*
+          sudo mksquashfs ${WORKDIR}/rootfs ${WORKDIR}/iso/LiveOS/squashfs.img -comp zstd -Xcompression-level 15 -b 1M
+
+          echo "=== 5. 使用 xorriso 封包生成纯 LiveCD ISO ==="
+          xorriso -as mkisofs \
+            -iso-level 3 \
+            -full-iso9660-filenames \
+            -volid "ALMA_LIVE" \
+            -eltorito-alt-boot \
+            -e EFI/BOOT/BOOTX64.EFI \
+            -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            -output ./output/${{ env.IMAGE_NAME }}.iso \
+            ${WORKDIR}/iso
+
+          # 清理临时工作目录，释放空间
+          sudo rm -rf ${WORKDIR}
+          ls -lh ./output/
 
       # =========================================================================
       # 4. 生成校验和并进行分卷切割 (处理大文件)
@@ -159,7 +185,7 @@ jobs:
         if: |
           github.event_name == 'push' ||
           github.event_name == 'schedule' ||
-          (github.event_name == 'workflow_dispatch' && inputs.build_iso == true)
+          (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)
         run: |
           cd output
           # 针对完整 ISO 计算 SHA256 校验和
@@ -177,7 +203,7 @@ jobs:
         if: |
           github.event_name == 'push' ||
           github.event_name == 'schedule' ||
-          (github.event_name == 'workflow_dispatch' && inputs.build_iso == true)
+          (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)
         with:
           tag_name: ${{ steps.vars.outputs.tag }}
           name: "LiveISO Release - ${{ steps.vars.outputs.tag }}"
@@ -185,9 +211,9 @@ jobs:
             output/${{ env.IMAGE_NAME }}.iso.part-*
             output/${{ env.IMAGE_NAME }}.iso.sha256
           body: |
-            ## AlmaLinux 10 Plasma LiveISO 构建完成
+            ## AlmaLinux 10 Plasma LiveCD 构建完成 (免安装直入桌面)
 
-            ### 合并分卷命令 (Linux/macOS):
+            ### 合并分卷命令 (Linux / macOS):
             ```bash
             cat ${{ env.IMAGE_NAME }}.iso.part-* >${{ env.IMAGE_NAME }}.iso
             sha256sum -c ${{ env.IMAGE_NAME }}.iso.sha256
@@ -201,13 +227,13 @@ jobs:
           generate_release_notes: false
 
       # =========================================================================
-      # 6. 将 ISO 作为 OCI Artifact (Blob) 推送到 GHCR 与 阿里云 ACR
+      # 6. 将完整 ISO 作为 OCI Artifact (Blob) 推送到 GHCR 与 阿里云 ACR
       # =========================================================================
       - name: Push ISO Blob to GHCR & Aliyun ACR via ORAS
         if: |
           github.event_name == 'push' ||
           github.event_name == 'schedule' ||
-          (github.event_name == 'workflow_dispatch' && inputs.build_iso == true)
+          (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)
         run: |
           cd output
           
@@ -216,7 +242,6 @@ jobs:
           oras login "${{ secrets.ALIYUN_ACR_REGISTRY }}" -u "${{ secrets.ALIYUN_ACR_USERNAME }}" -p "${{ secrets.ALIYUN_ACR_PASSWORD }}"
 
           echo "=== 2. 推送 ISO Blob 到 GHCR ==="
-          # 将 ISO 和 checksum 文件作为一个 artifact 推送
           oras push "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-iso:latest" \
             "${{ env.IMAGE_NAME }}.iso:application/x-iso9660-image" \
             "${{ env.IMAGE_NAME }}.iso.sha256:text/plain"
