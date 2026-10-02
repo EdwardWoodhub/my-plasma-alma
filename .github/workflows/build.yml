@@ -377,7 +377,7 @@ jobs:
           (github.event_name != 'workflow_dispatch' || inputs.build_iso == true) &&
           ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
-          echo "Logging into Aliyun ACR with podman..."
+          echo "Logging into Aliyun ACR via podman..."
           podman login ${{ secrets.ALIYUN_ACR_REGISTRY }} \
             -u "${{ secrets.ALIYUN_ACR_USERNAME }}" \
             -p "${{ secrets.ALIYUN_ACR_PASSWORD }}"
@@ -387,8 +387,10 @@ jobs:
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:live-iso" \
             "${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:live-iso"
 
-          echo "Pushing ISO image to ACR directly..."
+          echo "Pushing ISO image directly to Aliyun ACR..."
           podman push "${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:live-iso"
+      
+      
       
       
       
