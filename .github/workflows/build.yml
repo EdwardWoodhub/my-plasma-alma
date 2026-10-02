@@ -111,21 +111,41 @@ jobs:
             docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
 
       # =========================================================================
-      # 4. 构建 Live ISO (bootc-image-builder)
+      # 4. 构建 Live ISO (强制指定稳定软件源)
       # =========================================================================
       - name: Build Live ISO with bootc-image-builder
         if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
         run: |
           mkdir -p output
 
-          # 1. sudo 登录 GHCR，确保宿主机 root 用户环境具备拉取私有包权限
+          # 1. 登录 GHCR
           sudo podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" -p "${{ secrets.GITHUB_TOKEN }}"
 
-          # 2. 提前拉取目标镜像到 root 容器存储空间中
+          # 2. 提前拉取本地镜像
           echo "Pulling base image to local podman storage..."
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 3. 运行构建器：加入 --net=host 与 unconfined 权限，适配构建网络
+          # 3. 创建构建配置，强制指定稳定的 AlmaLinux 10 官方基础源与仓库
+          cat << 'EOF' > config.json
+          {
+            "customizations": {
+              "repositories": [
+                {
+                  "id": "baseos",
+                  "baseurl": "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/",
+                  "check_gpg": false
+                },
+                {
+                  "id": "appstream",
+                  "baseurl": "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/",
+                  "check_gpg": false
+                }
+              ]
+            }
+          }
+          EOF
+
+          # 4. 运行构建器，传入 --config config.json
           echo "Running bootc-image-builder..."
           sudo podman run \
             --rm \
@@ -133,13 +153,15 @@ jobs:
             --net=host \
             --security-opt label=type:unconfined_t \
             -v ./output:/output \
+            -v ./config.json:/config.json:ro \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             quay.io/centos-bootc/bootc-image-builder:latest \
+            --config /config.json \
             --type anaconda-iso \
             --rootfs ext4 \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 4. 稳健定位并重命名 ISO 文件
+          # 5. 提取生成的 ISO 并重命名
           ISO_FILE=$(find output -name "*.iso" 2>/dev/null | head -n 1)
           if [ -z "$ISO_FILE" ]; then
             echo "Error: 未在 output 目录中找到生成的 ISO！"
@@ -150,6 +172,8 @@ jobs:
           sudo mv "$ISO_FILE" "./${{ env.ISO_FILE_NAME }}.iso"
           sudo chown -R $USER:$USER "./${{ env.ISO_FILE_NAME }}.iso"
           ls -lh "${{ env.ISO_FILE_NAME }}.iso"
+      
+      
 
       # =========================================================================
       # 5. 切割 ISO 并推送到 GitHub Releases
