@@ -113,33 +113,34 @@ jobs:
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
           # 3. 使用 Heredoc 写入仓库配置（避免 printf 转义错误）
-          # 注意：优先使用官方源（全球可达），阿里云/清华作为备用镜像（国内网络更优）
+          # 注意：bootc-image-builder 规范使用 baseurl（单数），不用 baseurls（复数）
+          # GitHub Actions Runner 运行在美国 AWS 数据中心，只用全球 CDN 官方源
           cat > config.json << 'EOF'
           {
             "customizations": {
               "repositories": [
                 {
-                  "id": "baseos",
-                  "baseurls": [
-                  "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/",
-                  "https://mirrors.aliyun.com/almalinux/10/BaseOS/x86_64/os/",
-                  "https://mirrors.tuna.tsinghua.edu.cn/almaLinux/10/BaseOS/x86_64/os/"
-                ]
+                  "baseurl": "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/",
+                  "check_gpg": false,
+                  "check_release": false
                 },
                 {
-                  "id": "appstream",
-                  "baseurls": [
-                  "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/",
-                  "https://mirrors.aliyun.com/almalinux/10/AppStream/x86_64/os/",
-                  "https://mirrors.tuna.tsinghua.edu.cn/almaLinux/10/AppStream/x86_64/os/"
-                ]
+                  "baseurl": "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/",
+                  "check_gpg": false,
+                  "check_release": false
                 }
               ]
             }
           }
           EOF
+          echo "config.json content:"
+          cat config.json
 
           # 4. 运行构建器（带重试机制，应对 quay.io CDN 临时抖动）
+          # 设置 librepo 超时参数：每个镜像最多等15秒，避免长时间卡住
+          export LIBREPO_TIMEOUT=15
+          export LIBREPO_MAX_MIRROR_TRIES=5
+
           echo "Running bootc-image-builder... (with retry)"
           MAX_RETRIES=3
           RETRY_COUNT=0
@@ -148,6 +149,7 @@ jobs:
           while [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ] && [ "$BUILD_SUCCESS" = "false" ]; do
             RETRY_COUNT=$((RETRY_COUNT + 1))
             echo "=== Attempt $RETRY_COUNT of $MAX_RETRIES ==="
+            echo "LIBREPO_TIMEOUT=$LIBREPO_TIMEOUT LIBREPO_MAX_MIRROR_TRIES=$LIBREPO_MAX_MIRROR_TRIES"
 
             if sudo podman run \
               --rm \
