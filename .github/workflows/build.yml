@@ -153,10 +153,12 @@ jobs:
           podman run --rm --privileged \
             -v ${WORKDIR}/iso/isolinux:/out \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            dracut --nomcheck --xz \
-                   --add "dmsquash-live lvm mdraid qemu dm" \
-                   --kver "${KERNEL_VERSION}" \
-                   /out/initrd.img
+            dracut -f \
+                   --no-hostonly \
+                   --xz \
+                   --add "dmsquash-live lvm mdraid qemu" \
+                   /out/initrd.img "${KERNEL_VERSION}"
+            
 
           echo "=== 4. 提取 UEFI 引导程序 (BOOTX64.EFI / grubx64.efi) ==="
           # 兼容不同发行版的 shim/grub 路径
