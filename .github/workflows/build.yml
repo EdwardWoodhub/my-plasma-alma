@@ -24,7 +24,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120 # 设置超时防止卡死
     permissions:
       contents: write       # Release 上传必需权限
@@ -385,7 +385,7 @@ jobs:
           echo "Tagging ISO image for ACR..."
           podman tag \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:live-iso" \
-            "${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:live-iso
+            "${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:live-iso"
 
           echo "Pushing ISO image to ACR directly..."
           podman push "${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:live-iso"
