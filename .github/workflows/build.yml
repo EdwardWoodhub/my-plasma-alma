@@ -149,15 +149,23 @@ jobs:
           cp "${VMLINUZ}" ${WORKDIR}/iso/isolinux/vmlinuz
 
           echo "=== 3. 容器内现场构建 LiveCD 专属 initramfs (集成 dmsquash-live 模块) ==="
-          # 启动临时容器，借助其内部的 dracut 生成支持从 ISO/Squashfs 挂载根分区的 initrd
-          podman run --rm --privileged \
+          sudo podman run --rm --privileged \
             -v ${WORKDIR}/iso/isolinux:/out \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            dracut -f \
-                   --no-hostonly \
-                   --xz \
-                   --add "dmsquash-live lvm mdraid qemu" \
-                   /out/initrd.img "${KERNEL_VERSION}"
+            bash -c "
+              # 确保安装了 dmsquash-live 所需的包
+              rpm -q dracut-live >/dev/null 2>&1 || dnf install -y dracut-live
+              
+              # 生成 Live initramfs (加 --stdlog 3 屏蔽写 /dev/kmsg 刷屏)
+              dracut -f \
+                     --no-hostonly \
+                     --stdlog 3 \
+                     --xz \
+                     --add 'dmsquash-live lvm mdraid qemu dm' \
+                     /out/initrd.img '${KERNEL_VERSION}'
+            "
+          
+          
             
 
           echo "=== 4. 提取 UEFI 引导程序 (BOOTX64.EFI / grubx64.efi) ==="
