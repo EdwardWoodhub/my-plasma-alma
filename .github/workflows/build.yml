@@ -173,6 +173,39 @@ jobs:
 
 
       # =========================================================================
+      # 3.5. 预拉取 bootc-image-builder 镜像（应对 quay.io CDN 抖动）
+      # =========================================================================
+      - name: Pre-pull bootc-image-builder image (aggressive retry)
+        if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
+        run: |
+          echo "=== Pre-pulling bootc-image-builder image ==="
+          echo "quay.io CDN may be unstable; this step retries up to 5 times"
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          PULL_SUCCESS=false
+          while [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ] && [ "$PULL_SUCCESS" = "false" ]; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "=== Pre-pull attempt $RETRY_COUNT of $MAX_RETRIES ==="
+            if sudo podman pull quay.io/centos-bootc/bootc-image-builder:latest; then
+              PULL_SUCCESS=true
+              echo "=== Pre-pull successful! Image cached for build step ==="
+            else
+              echo "WARNING: Pre-pull failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
+              if [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ]; then
+                WAIT_TIME=$((RETRY_COUNT * 45))
+                echo "Waiting $WAIT_TIME seconds before retry..."
+                sleep "$WAIT_TIME"
+              else
+                echo "ERROR: Pre-pull failed after $MAX_RETRIES attempts"
+                echo "quay.io CDN may be experiencing an outage."
+                echo "Please wait a few minutes and re-run this workflow."
+                exit 1
+              fi
+            fi
+          done
+          echo "Verifying image is cached locally..."
+          sudo podman image inspect quay.io/centos-bootc/bootc-image-builder:latest > /dev/null 2>&1 && echo "Image verified locally!" || echo "WARNING: Image may not be fully cached, build step will retry"
+      # =========================================================================
       # 4. 构建 Live ISO (bootc-image-builder)
       # =========================================================================
       - name: Build Live ISO with bootc-image-builder
@@ -220,7 +253,7 @@ jobs:
 
           # 5. 运行构建器（带重试机制，应对 quay.io CDN 临时抖动和镜像源不可达）
           echo "Running bootc-image-builder... (with retry)"
-          MAX_RETRIES=3
+          MAX_RETRIES=5
           RETRY_COUNT=0
           BUILD_SUCCESS=false
 
@@ -249,7 +282,7 @@ jobs:
             else
               echo "WARNING: bootc-image-builder failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
               if [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ]; then
-                WAIT_TIME=$((RETRY_COUNT * 30))
+                WAIT_TIME=$((RETRY_COUNT * 45))
                 echo "Waiting $WAIT_TIME seconds before retry..."
                 sleep "$WAIT_TIME"
               else
