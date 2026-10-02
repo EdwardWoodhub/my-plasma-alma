@@ -112,7 +112,6 @@ jobs:
             docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
             docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
 
-      
       # =========================================================================
       # 3. 构建 Bootc LiveISO (Anaconda ISO)
       # =========================================================================
@@ -124,13 +123,16 @@ jobs:
         run: |
           mkdir -p output
 
-          # 确保容器存储目录存在
-          sudo mkdir -p /var/lib/containers/storage
+          echo "=== 1. 让 root 环境登录 GHCR ==="
+          sudo podman login ghcr.io \
+            -u "${{ env.ACTOR_LOWER }}" \
+            -p "${{ secrets.GITHUB_TOKEN }}"
 
-          # 运行 bootc-image-builder
-          # 1. 移除 -it，改用非交互模式
-          # 2. 挂载 /var/lib/containers/storage
-          # 3. 挂载认证文件，确保能拉取刚推送到 GHCR 的镜像
+          echo "=== 2. 提前拉取目标镜像到 root 容器存储库 ==="
+          # 满足 bootc-image-builder 要求：镜像必须先存在于本地容器存储中
+          sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
+          echo "=== 3. 运行 bootc-image-builder 生成 ISO ==="
           sudo podman run \
             --rm \
             --privileged \
@@ -138,13 +140,12 @@ jobs:
             --security-opt label=type:unconfined_t \
             -v ./output:/output \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
-            -v $XDG_RUNTIME_DIR/containers/auth.json:/run/containers/0/auth.json:ro \
             quay.io/centos-bootc/bootc-image-builder:latest \
             --type anaconda-iso \
-            --tls-verify=false \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            --local \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 规范重命名 ISO
+          # 规范重命名 ISO 并修正文件所有权
           ISO_FILE=$(find output -name "*.iso" | head -n 1)
           sudo mv "$ISO_FILE" ./output/${{ env.IMAGE_NAME }}.iso
           sudo chown -R $USER:$USER output/
