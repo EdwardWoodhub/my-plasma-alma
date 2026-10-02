@@ -409,19 +409,4 @@ jobs:
       
       
       
-      # =========================================================================
-      # 8. 清理 podman 认证文件权限（修复 logout 权限错误）
-      # =========================================================================
-      - name: Cleanup podman auth permissions
-        if: always()
-        run: |
-          set +e
-          echo "=== Cleaning up podman auth permissions ==="
-          # 修复 /run/user/XXX/containers/ 权限（sudo podman login 创建的 root 文件）
-          sudo chown -R $USER:$USER /run/user/$(id -u)/containers 2>/dev/null || true
-          sudo chown -R $USER:$USER /home/runner/.config/containers 2>/dev/null || true
-          # 静默退出（即使失败也不影响流水线状态）
-          rm -f /run/user/$(id -u)/containers/auth.json 2>/dev/null || true
-          rm -f /home/runner/.config/containers/auth.json 2>/dev/null || true
-          echo "=== Cleanup complete ==="
-
+      
