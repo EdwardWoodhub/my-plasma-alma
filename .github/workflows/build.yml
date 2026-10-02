@@ -97,18 +97,7 @@ jobs:
           cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-      # 同步 OS 镜像到阿里云 ACR
-      - name: Sync OCI Image from GHCR to Aliyun ACR
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-        run: |
-          echo "Syncing ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."
-          skopeo copy \
-            --src-creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
-            --dest-creds "${{ secrets.ALIYUN_ACR_USERNAME }}:${{ secrets.ALIYUN_ACR_PASSWORD }}" \
-            --dest-compress-format gzip \
-            --format v2s2 \
-            docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
+      
 
       # =========================================================================
       # 4. 构建 Live ISO (强制指定稳定软件源)
@@ -236,3 +225,18 @@ jobs:
             --format v2s2 \
             docker://${{ env.REGISTRY }}/${{ env.ISO_IMAGE_NAME }}:latest \
             docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.ISO_IMAGE_NAME }}:latest
+      
+      # 同步 OS 镜像到阿里云 ACR
+      - name: Sync OCI Image from GHCR to Aliyun ACR
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        run: |
+          echo "Syncing ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."
+          skopeo copy \
+            --src-creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
+            --dest-creds "${{ secrets.ALIYUN_ACR_USERNAME }}:${{ secrets.ALIYUN_ACR_PASSWORD }}" \
+            --dest-compress-format gzip \
+            --format v2s2 \
+            docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
+      
+      
