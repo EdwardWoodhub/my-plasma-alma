@@ -113,18 +113,26 @@ jobs:
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
           # 3. 使用 Heredoc 写入仓库配置（避免 printf 转义错误）
-          # 注意：此处使用了阿里云镜像源以提升构建速度和稳定性
+          # 注意：优先使用官方源（全球可达），阿里云/清华作为备用镜像（国内网络更优）
           cat > config.json << 'EOF'
           {
             "customizations": {
               "repositories": [
                 {
                   "id": "baseos",
-                  "baseurls": ["https://mirrors.aliyun.com/almalinux/10/BaseOS/x86_64/os/"]
+                  "baseurls": [
+                  "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/",
+                  "https://mirrors.aliyun.com/almalinux/10/BaseOS/x86_64/os/",
+                  "https://mirrors.tuna.tsinghua.edu.cn/almaLinux/10/BaseOS/x86_64/os/"
+                ]
                 },
                 {
                   "id": "appstream",
-                  "baseurls": ["https://mirrors.aliyun.com/almalinux/10/AppStream/x86_64/os/"]
+                  "baseurls": [
+                  "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/",
+                  "https://mirrors.aliyun.com/almalinux/10/AppStream/x86_64/os/",
+                  "https://mirrors.tuna.tsinghua.edu.cn/almaLinux/10/AppStream/x86_64/os/"
+                ]
                 }
               ]
             }
