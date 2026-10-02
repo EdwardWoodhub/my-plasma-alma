@@ -136,38 +136,38 @@ jobs:
 
           # 从基础镜像创建临时容器（不启动）
           echo "Creating temporary container..."
-          sudo podman create --name _patch_tmp "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" sleep infinity
+          sudo podman create --name patch_tmp "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" sleep infinity
 
           # 先启动容器（后续 exec 命令需要容器运行中）
           echo "Starting container..."
-          sudo podman start _patch_tmp
+          sudo podman start patch_tmp
 
           # 删除镜像中原有的所有 .repo 文件（先删旧的，再复制新的）
           echo "Removing existing repo files..."
-          sudo podman exec _patch_tmp rm -f /etc/yum.repos.d/*.repo 2>/dev/null || true
+          sudo podman exec patch_tmp rm -f /etc/yum.repos.d/*.repo 2>/dev/null || true
 
           # 复制新的 repo 文件到容器中
           echo "Copying new repo files..."
-          sudo podman cp /tmp/BaseOS.repo _patch_tmp:/etc/yum.repos.d/BaseOS.repo
-          sudo podman cp /tmp/AppStream.repo _patch_tmp:/etc/yum.repos.d/AppStream.repo
+          sudo podman cp /tmp/BaseOS.repo patch_tmp:/etc/yum.repos.d/BaseOS.repo
+          sudo podman cp /tmp/AppStream.repo patch_tmp:/etc/yum.repos.d/AppStream.repo
 
           # 验证文件已写入
           echo "Verifying new repo files:"
-          sudo podman exec _patch_tmp cat /etc/yum.repos.d/BaseOS.repo
-          sudo podman exec _patch_tmp cat /etc/yum.repos.d/AppStream.repo
+          sudo podman exec patch_tmp cat /etc/yum.repos.d/BaseOS.repo
+          sudo podman exec patch_tmp cat /etc/yum.repos.d/AppStream.repo
           echo "Repo files in directory:"
-          sudo podman exec _patch_tmp ls -la /etc/yum.repos.d/
+          sudo podman exec patch_tmp ls -la /etc/yum.repos.d/
 
           # 停止容器
           echo "Stopping container..."
-          sudo podman stop _patch_tmp 2>/dev/null || true
+          sudo podman stop patch_tmp 2>/dev/null || true
 
           # 提交修改后的镜像（覆盖 latest 标签）
           echo "Committing patched image..."
-          sudo podman commit _patch_tmp "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          sudo podman commit patch_tmp "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
           # 清理临时容器
-          sudo podman rm _patch_tmp 2>/dev/null || true
+          sudo podman rm patch_tmp 2>/dev/null || true
 
           echo "=== Base image repo mirrors patched successfully ==="
 
