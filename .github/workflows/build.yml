@@ -16,9 +16,9 @@ on:
         default: true
 
 env:
-  # OS 系统镜像名（用于 bootc upgrade）
+  # OS 系统镜像名（用于系统的 bootc upgrade）
   IMAGE_NAME: my-plasma-alma-vm
-  # 关键修改 1：ISO 专属容器仓库名，防止覆盖掉上面的系统基础镜像！
+  # ISO 专属镜像仓库名，避免覆盖系统基础镜像
   ISO_IMAGE_NAME: my-plasma-alma-vm-iso
   ISO_FILE_NAME: my-plasma-alma-vm
 
@@ -26,9 +26,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write       # Release 上传权限
-      packages: write       # GHCR 推送权限
-      id-token: write       # Cosign 签名权限
+      contents: write       # Release 上传必需权限
+      packages: write       # GHCR 推送必需权限
+      id-token: write       # Cosign 签名必需权限
 
     steps:
       # =========================================================================
@@ -40,7 +40,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 将 GitHub 用户名强制转换为纯小写，防止 Registry 报错
+      # 将 GitHub 用户名强制转换为小写，防止 Registry 报错
       - name: Set lower case registry name
         id: registry_case
         run: |
@@ -70,7 +70,7 @@ jobs:
           password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
 
       # =========================================================================
-      # 3. 构建并推送基础 OS 容器镜像 (用于系统的 bootc upgrade)
+      # 3. 构建并推送基础 OS 容器镜像到 GHCR
       # =========================================================================
       - name: Build image using Buildah
         id: build-image
@@ -97,8 +97,6 @@ jobs:
           cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-      
-
       # =========================================================================
       # 4. 构建 Live ISO (bootc-image-builder)
       # =========================================================================
@@ -107,19 +105,20 @@ jobs:
         run: |
           mkdir -p output
 
-          # 1. 登录 GHCR
+          # 1. 宿主机 root 登录 GHCR
           sudo podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" -p "${{ secrets.GITHUB_TOKEN }}"
 
-          # 2. 提前拉取本地镜像
+          # 2. 提前拉取本地镜像到 root 容器存储空间中
           echo "Pulling base image to local podman storage..."
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 3. 写入正确的配置格式（字段名是 baseurls 数组）
+          # 3. 写入仓库配置，提供稳定官方源地址
           cat << 'EOF' > config.json
           {
             "customizations": {
               "repositories": [
                 {
+                  "id": "baseos",
                   "name": "baseos",
                   "baseurls": [
                     "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/"
@@ -127,6 +126,7 @@ jobs:
                   "check_gpg": false
                 },
                 {
+                  "id": "appstream",
                   "name": "appstream",
                   "baseurls": [
                     "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/"
@@ -165,10 +165,6 @@ jobs:
           sudo mv "$ISO_FILE" "./${{ env.ISO_FILE_NAME }}.iso"
           sudo chown -R $USER:$USER "./${{ env.ISO_FILE_NAME }}.iso"
           ls -lh "${{ env.ISO_FILE_NAME }}.iso"
-      
-      
-      
-      
 
       # =========================================================================
       # 5. 切割 ISO 并推送到 GitHub Releases
@@ -191,16 +187,16 @@ jobs:
           generate_release_notes: true
 
       # =========================================================================
-      # 6. 将 ISO 封装为独立 OCI 镜像容器并推送到 GHCR 和 阿里云 ACR
+      # 6. 将 ISO 封装为独立容器镜像并推送到 GHCR
       # =========================================================================
-      - name: Package ISO into Container Image & Push
+      - name: Package ISO into Container Image & Push to GHCR
         if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
         run: |
-          # 1. 修复之前 sudo 执行命令残留的权限锁定问题
+          # 1. 修复之前 sudo 命令残留的权限问题
           sudo chown -R $USER:$USER /run/user/$(id -u)/containers 2>/dev/null || true
           sudo chown -R $USER:$USER /home/runner/.config/containers 2>/dev/null || true
 
-          # 2. 重新用当前用户登录 GHCR，确保认证文件有效
+          # 2. 重新用当前用户登录 GHCR，确保认证文件生效
           podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" -p "${{ secrets.GITHUB_TOKEN }}"
 
           echo "Creating containerfile for ISO packaging..."
@@ -218,6 +214,24 @@ jobs:
             --creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
             "${{ env.REGISTRY }}/${{ env.ISO_IMAGE_NAME }}:latest"
 
+      # =========================================================================
+      # 7. 统一同步镜像到阿里云 ACR（保留在流水线最后）
+      # =========================================================================
+      - name: Sync OS Image to Aliyun ACR
+        if: |
+          always() &&
+          steps.push-to-ghcr.conclusion == 'success' &&
+          ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+        run: |
+          echo "Syncing OS image ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."
+          skopeo copy \
+            --src-creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
+            --dest-creds "${{ secrets.ALIYUN_ACR_USERNAME }}:${{ secrets.ALIYUN_ACR_PASSWORD }}" \
+            --dest-compress-format gzip \
+            --format v2s2 \
+            docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
+
       - name: Sync ISO Container Image to Aliyun ACR
         if: |
           (github.event_name != 'workflow_dispatch' || inputs.build_iso == true) &&
@@ -231,18 +245,3 @@ jobs:
             --format v2s2 \
             docker://${{ env.REGISTRY }}/${{ env.ISO_IMAGE_NAME }}:latest \
             docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.ISO_IMAGE_NAME }}:latest
-      
-      # 同步 OS 镜像到阿里云 ACR
-      - name: Sync OCI Image from GHCR to Aliyun ACR
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-        run: |
-          echo "Syncing ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."
-          skopeo copy \
-            --src-creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
-            --dest-creds "${{ secrets.ALIYUN_ACR_USERNAME }}:${{ secrets.ALIYUN_ACR_PASSWORD }}" \
-            --dest-compress-format gzip \
-            --format v2s2 \
-            docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
-      
-      
