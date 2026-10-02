@@ -269,7 +269,7 @@ jobs:
           echo "Found ISO: $ISO_FILE"
           sudo mv "$ISO_FILE" "./${{ env.ISO_FILE_NAME }}.iso"
           # 确保当前用户有权读取该文件用于后续步骤
-          chmod 644 "./${{ env.ISO_FILE_NAME }}.iso"
+          sudo chmod 644 "./${{ env.ISO_FILE_NAME }}.iso"
           ls -lh "${{ env.ISO_FILE_NAME }}.iso"
 
       # =========================================================================
