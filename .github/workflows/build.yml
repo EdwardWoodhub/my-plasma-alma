@@ -7,7 +7,7 @@ on:
     paths-ignore:
       - "**.md"
   schedule:
-    - cron: "33 20 * * *" # 每天 UTC 20:33 (对应北京时间 CST 04:33)
+    - cron: "33 20 * * *" # 每天 UTC 20:33 (对应北京时间 CST 04:33)[cite: 1]
   workflow_dispatch:
     inputs:
       release_iso:
@@ -24,16 +24,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write       # GitHub Release 发布所需权限
-      packages: write       # GHCR 推送所需权限
-      id-token: write       # Cosign 签名必需权限
+      contents: write       # 发布 GitHub Release 所需权限
+      packages: write       # 推送 GHCR 所需权限[cite: 1]
+      id-token: write       # Cosign 签名必需权限[cite: 1]
 
     steps:
       - name: Maximize build space
-        uses: ublue-os/remove-unwanted-software@v7
+        uses: ublue-os/remove-unwanted-software@v7[cite: 1]
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4[cite: 1]
 
       # 将 GitHub 用户名/组织名强制转换为纯小写，防止 Podman 推送因大写字符报错
       - name: Set lower case registry name & tags
@@ -49,7 +49,7 @@ jobs:
           echo "RELEASE_TAG=${RELEASE_TAG}" >> $GITHUB_ENV
 
       - name: Install Cosign (Sigstore)
-        uses: sigstore/cosign-installer@v3.5.0
+        uses: sigstore/cosign-installer@v3.5.0[cite: 1]
 
       - name: Install ORAS CLI (OCI Artifacts Tool)
         uses: oras-project/setup-oras@v1
@@ -58,91 +58,76 @@ jobs:
       # 1. 登录 GHCR
       # -----------------------------------------------------------------------
       - name: Log into GitHub Container Registry
-        uses: redhat-actions/podman-login@v1
+        uses: redhat-actions/podman-login@v1[cite: 1]
         with:
-          registry: ghcr.io
-          username: ${{ env.ACTOR_LOWER }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io[cite: 1]
+          username: ${{ env.ACTOR_LOWER }}[cite: 1]
+          password: ${{ secrets.GITHUB_TOKEN }}[cite: 1]
 
       # -----------------------------------------------------------------------
       # 2. 构建并推送 Plasma Bootc 容器镜像
       # -----------------------------------------------------------------------
       - name: Build image using Buildah
         id: build-image
-        uses: redhat-actions/buildah-build@v2
+        uses: redhat-actions/buildah-build@v2[cite: 1]
         with:
-          image: ${{ env.IMAGE_NAME }}
-          tags: latest
+          image: ${{ env.IMAGE_NAME }}[cite: 1]
+          tags: latest[cite: 1]
           containerfiles: |
             ./Containerfile
 
       - name: Push to GHCR
         id: push-to-ghcr
-        uses: redhat-actions/push-to-registry@v2
+        uses: redhat-actions/push-to-registry@v2[cite: 1]
         with:
-          image: ${{ env.IMAGE_NAME }}
-          tags: latest
-          registry: ${{ env.REGISTRY }}
+          image: ${{ env.IMAGE_NAME }}[cite: 1]
+          tags: latest[cite: 1]
+          registry: ${{ env.REGISTRY }}[cite: 1]
 
       - name: Sign image with Cosign
         env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}[cite: 1]
         run: |
           cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"[cite: 1]
 
       # -----------------------------------------------------------------------
-      # 3. 构建 Live ISO (针对 AlmaLinux/CentOS bootc 架构)
+      # 3. 使用 bootc-iso-installer 构建 Live/Installer ISO
+      #    自带完整引导环境，不联网解析外部 RPM 依赖，避免 404 镜像源报错
       # -----------------------------------------------------------------------
-      - name: Build Live ISO using bootc-image-builder
+      - name: Build Live ISO using bootc-iso-installer
         if: |
           github.event_name == 'push' ||
           github.event_name == 'schedule' ||
           (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)
         run: |
           mkdir -p output
-          sudo mkdir -p /var/lib/containers/storage
 
-          # 1. 登录并拉取构建好的本地镜像
-          echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" --password-stdin
-          sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-
-          # 2. 生成基于 bootc 原生的引导/安装 ISO
-          # 使用 --type iso 替代 anaconda-iso，无需联网解析旧 RPM 仓库依赖
-          echo "Starting bootc-image-builder..."
+          echo "Starting bootc-iso-installer..."
           sudo podman run \
             --rm \
             --privileged \
             --net host \
-            -v /var/lib/containers/storage:/var/lib/containers/storage \
-            -v $(pwd)/output:/output \
-            quay.io/centos-bootc/bootc-image-builder:latest \
-            --type iso \
-            --rootfs ext4 \
+            -v $(pwd)/output:/build-container-installer/build \
+            ghcr.io/ublue-os/bootc-iso-installer:latest \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 3. 恢复产物目录权限
+          # 恢复产物目录权限给 Actions runner
           sudo chown -R $USER:$USER output/
-          
-          # 4. 移动并确认 ISO (bootc 原生 ISO 产物路径在 output/bootiso/install.iso 或 output/image/boot.iso)
-          if [ -f output/bootiso/install.iso ]; then
-            mv output/bootiso/install.iso ./${{ env.ISO_NAME }}.iso
-          elif [ -f output/image/boot.iso ]; then
-            mv output/image/boot.iso ./${{ env.ISO_NAME }}.iso
-          elif [ -f output/boot.iso ]; then
-            mv output/boot.iso ./${{ env.ISO_NAME }}.iso
+
+          # 查找生成的 ISO 并统一重命名
+          ISO_FILE=$(find output -maxdepth 1 -name "*.iso" | head -n 1)
+          if [ -n "$ISO_FILE" ]; then
+            mv "$ISO_FILE" ./${{ env.ISO_NAME }}.iso
           else
-            find output -name "*.iso" -exec mv {} ./${{ env.ISO_NAME }}.iso \;
+            echo "Error: ISO not found in output directory!"
+            exit 1
           fi
 
           ls -lh ./${{ env.ISO_NAME }}.iso
-      
-      
-      
-      
 
       # -----------------------------------------------------------------------
-      # 4. 生成校验和与 ISO 分卷 (防止超单文件上限 & 适配 Releases)
+      # 4. 生成校验和与 ISO 分卷 (防止超单文件上限 & 方便网络下载)
       # -----------------------------------------------------------------------
       - name: Prepare ISO and Split
         if: |
@@ -153,8 +138,8 @@ jobs:
           # 校验完整 ISO
           sha256sum ${{ env.ISO_NAME }}.iso > SHA256SUMS
           
-          # 分卷为 1500MB 一个的分卷包 (后缀如 .part-00, .part-01)
-          split -b 1500M -d ${{ env.ISO_NAME }}.iso "${{ env.ISO_NAME }}.iso.part-"
+          # 分卷为 1500MB 一个的分卷包 (后缀如 .part-00, .part-01)[cite: 2]
+          split -b 1500M -d ${{ env.ISO_NAME }}.iso "${{ env.ISO_NAME }}.iso.part-"[cite: 2]
           
           # 校验分卷文件
           sha256sum ${{ env.ISO_NAME }}.iso.part-* >> SHA256SUMS
@@ -163,11 +148,11 @@ jobs:
       # 5. 发布 ISO 分卷与校验和到 GitHub Releases
       # -----------------------------------------------------------------------
       - name: Publish ISO to GitHub Releases
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2[cite: 2]
         if: |
           github.event_name == 'push' ||
           github.event_name == 'schedule' ||
-          (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)
+          (github.event_name == 'workflow_dispatch' && inputs.release_iso == true)[cite: 2]
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: "Plasma OS Live ISO (${{ env.RELEASE_TAG }})"
@@ -203,18 +188,18 @@ jobs:
             "${{ env.ISO_NAME }}.iso:application/x-iso9660-image"
 
       # -----------------------------------------------------------------------
-      # 7. 同步容器镜像与 ISO Artifact 到阿里云 ACR
+      # 7. 登录并同步容器镜像与 ISO Artifact 到阿里云 ACR
       # -----------------------------------------------------------------------
       - name: Log in to Aliyun ACR
         if: |
           (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
           github.event_name == 'workflow_dispatch' ||
           github.event_name == 'schedule'
-        uses: redhat-actions/podman-login@v1
+        uses: redhat-actions/podman-login@v1[cite: 1]
         with:
-          registry: ${{ secrets.ALIYUN_ACR_REGISTRY }}
-          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
-          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+          registry: ${{ secrets.ALIYUN_ACR_REGISTRY }}[cite: 1]
+          username: ${{ secrets.ALIYUN_ACR_USERNAME }}[cite: 1]
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}[cite: 1]
 
       - name: Sync Bootc Container Image to Aliyun ACR
         if: |
@@ -222,14 +207,14 @@ jobs:
           github.event_name == 'workflow_dispatch' ||
           github.event_name == 'schedule'
         run: |
-          echo "Syncing ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."
+          echo "Syncing ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."[cite: 1]
           skopeo copy \
             --src-creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
             --dest-creds "${{ secrets.ALIYUN_ACR_USERNAME }}:${{ secrets.ALIYUN_ACR_PASSWORD }}" \
             --dest-compress-format gzip \
             --format v2s2 \
             docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
+            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest[cite: 1]
 
       - name: Push ISO Artifact to Aliyun ACR
         if: |
@@ -237,7 +222,6 @@ jobs:
           github.event_name == 'workflow_dispatch' ||
           github.event_name == 'schedule'
         run: |
-          # 登录 ORAS 到 ACR
           oras login "${{ secrets.ALIYUN_ACR_REGISTRY }}" \
             -u "${{ secrets.ALIYUN_ACR_USERNAME }}" \
             -p "${{ secrets.ALIYUN_ACR_PASSWORD }}"
