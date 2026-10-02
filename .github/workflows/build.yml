@@ -99,6 +99,80 @@ jobs:
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
       # =========================================================================
+      # 4a. 修改基础镜像中的 yum repo 文件（关键修复）
+      # bootc-image-builder 的 config.json repositories 配置只影响额外仓库，
+      # 不影响 BaseOS/AppStream 等系统基础仓库。基础仓库的镜像源由镜像内部
+      # /etc/yum.repos.d/ 中的 repo 文件决定，必须直接修改镜像内容。
+      # =========================================================================
+      - name: Patch base image repo mirrors (fix mirror unreachable)
+        if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
+        run: |
+          echo "=== Patching base image repo mirrors ==="
+
+          # 确保 root 用户已登录 GHCR（用于拉取镜像）
+          sudo podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" -p "${{ secrets.GITHUB_TOKEN }}"
+
+          # 创建 BaseOS repo 文件（宿主机临时文件）
+          cat > /tmp/BaseOS.repo << 'REPOEOF'
+          [baseos]
+          name=AlmaLinux BaseOS 10 - x86_64
+          baseurl=https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/
+          enabled=1
+          gpgcheck=0
+          repo_gpgcheck=0
+          metadata_expire=6h
+          REPOEOF
+
+          # 创建 AppStream repo 文件（宿主机临时文件）
+          cat > /tmp/AppStream.repo << 'REPOEOF'
+          [appstream]
+          name=AlmaLinux AppStream 10 - x86_64
+          baseurl=https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/
+          enabled=1
+          gpgcheck=0
+          repo_gpgcheck=0
+          metadata_expire=6h
+          REPOEOF
+
+          # 从基础镜像创建临时容器（不启动）
+          echo "Creating temporary container..."
+          sudo podman create --name _patch_tmp "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" sleep infinity
+
+          # 先启动容器（后续 exec 命令需要容器运行中）
+          echo "Starting container..."
+          sudo podman start _patch_tmp
+
+          # 删除镜像中原有的所有 .repo 文件（先删旧的，再复制新的）
+          echo "Removing existing repo files..."
+          sudo podman exec _patch_tmp rm -f /etc/yum.repos.d/*.repo 2>/dev/null || true
+
+          # 复制新的 repo 文件到容器中
+          echo "Copying new repo files..."
+          sudo podman cp /tmp/BaseOS.repo _patch_tmp:/etc/yum.repos.d/BaseOS.repo
+          sudo podman cp /tmp/AppStream.repo _patch_tmp:/etc/yum.repos.d/AppStream.repo
+
+          # 验证文件已写入
+          echo "Verifying new repo files:"
+          sudo podman exec _patch_tmp cat /etc/yum.repos.d/BaseOS.repo
+          sudo podman exec _patch_tmp cat /etc/yum.repos.d/AppStream.repo
+          echo "Repo files in directory:"
+          sudo podman exec _patch_tmp ls -la /etc/yum.repos.d/
+
+          # 停止容器
+          echo "Stopping container..."
+          sudo podman stop _patch_tmp 2>/dev/null || true
+
+          # 提交修改后的镜像（覆盖 latest 标签）
+          echo "Committing patched image..."
+          sudo podman commit _patch_tmp "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
+          # 清理临时容器
+          sudo podman rm _patch_tmp 2>/dev/null || true
+
+          echo "=== Base image repo mirrors patched successfully ==="
+
+
+      # =========================================================================
       # 4. 构建 Live ISO (bootc-image-builder)
       # =========================================================================
       - name: Build Live ISO with bootc-image-builder
@@ -109,45 +183,37 @@ jobs:
           # 1. 宿主机 root 登录 GHCR
           sudo podman login ghcr.io -u "${{ env.ACTOR_LOWER }}" -p "${{ secrets.GITHUB_TOKEN }}"
 
-          # 2. 提前拉取本地镜像到 root 容器存储空间中
-          echo "Pulling base image to local podman storage..."
-          sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          # 2. 确保基础镜像在 root 容器存储中可用
+          # 注意：如果 "Patch base image repo mirrors" 步骤成功执行，
+          # 镜像已经被拉取并打标签为 latest，此处无需重复拉取。
+          # 仅在镜像被清理的极端情况下才需要手动拉取（会丢失 Patch 修改）。
+          echo "Checking if base image is available locally..."
+          if ! sudo podman image inspect "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" > /dev/null 2>&1; then
+            echo "Image not found locally (may have been evicted), pulling from registry..."
+            sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo "WARNING: Image was re-pulled from registry. The repo mirror patches may be lost."
+            echo "Consider re-running this job to apply patches from scratch."
+          else
+            echo "Base image already available locally."
+          fi
 
-          # 3. 使用 Heredoc 写入仓库配置（避免 printf 转义问题）
-          # 每个 repo 配置多个镜像源地址，前一个失败自动降级到下一个
-          # GitHub Actions Runner 运行在美国 AWS 数据中心
+          # 3. 写入 bootc-image-builder 配置文件
+          # 注意：config.json 中的 repositories 配置只影响额外仓库的添加，
+          # 不影响系统基础仓库（BaseOS/AppStream）的镜像源。
+          # 基础仓库镜像源已通过 "Patch base image repo mirrors" 步骤修改。
           cat > config.json << 'EOF'
           {
-            "customizations": {
-              "repositories": [
-                {
-                  "id": "baseos",
-                  "baseurls": [
-                    "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/",
-                    "https://mirrors.mit.edu/almalinux/10/BaseOS/x86_64/os/",
-                    "https://mirror.csclub.uwaterloo.ca/almalinux/10/BaseOS/x86_64/os/"
-                  ]
-                },
-                {
-                  "id": "appstream",
-                  "baseurls": [
-                    "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/",
-                    "https://mirrors.mit.edu/almalinux/10/AppStream/x86_64/os/",
-                    "https://mirror.csclub.uwaterloo.ca/almalinux/10/AppStream/x86_64/os/"
-                  ]
-                }
-              ]
-            }
+            "customizations": {}
           }
           EOF
           echo "config.json content:"
           cat config.json
 
-          # 4. 设置 librepo 超时参数
+          # 4. 设置 librepo 超时参数（增加超时时间应对网络波动）
           # LIBREPO_TIMEOUT: 每个镜像尝试的最大等待时间(秒)
           # LIBREPO_MAX_MIRROR_TRIES: 每个镜像最大重试次数
           # 注意：这些变量必须通过 podman run --env 显式传入容器内部才能生效
-          export LIBREPO_TIMEOUT=30
+          export LIBREPO_TIMEOUT=60
           export LIBREPO_MAX_MIRROR_TRIES=10
 
           echo "Librepo settings: TIMEOUT=$LIBREPO_TIMEOUT MAX_TRIES=$LIBREPO_MAX_MIRROR_TRIES"
