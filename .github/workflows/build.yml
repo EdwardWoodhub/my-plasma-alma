@@ -100,7 +100,7 @@ jobs:
       
 
       # =========================================================================
-      # 4. 构建 Live ISO (强制指定稳定软件源)
+      # 4. 构建 Live ISO (bootc-image-builder)
       # =========================================================================
       - name: Build Live ISO with bootc-image-builder
         if: github.event_name != 'workflow_dispatch' || inputs.build_iso == true
@@ -114,19 +114,23 @@ jobs:
           echo "Pulling base image to local podman storage..."
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 3. 创建构建配置，强制指定稳定的 AlmaLinux 10 官方基础源与仓库
+          # 3. 写入正确的配置格式（字段名是 baseurls 数组）
           cat << 'EOF' > config.json
           {
             "customizations": {
               "repositories": [
                 {
-                  "id": "baseos",
-                  "baseurl": "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/",
+                  "name": "baseos",
+                  "baseurls": [
+                    "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/"
+                  ],
                   "check_gpg": false
                 },
                 {
-                  "id": "appstream",
-                  "baseurl": "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/",
+                  "name": "appstream",
+                  "baseurls": [
+                    "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/"
+                  ],
                   "check_gpg": false
                 }
               ]
@@ -134,7 +138,7 @@ jobs:
           }
           EOF
 
-          # 4. 运行构建器，传入 --config config.json
+          # 4. 运行构建器
           echo "Running bootc-image-builder..."
           sudo podman run \
             --rm \
@@ -161,6 +165,8 @@ jobs:
           sudo mv "$ISO_FILE" "./${{ env.ISO_FILE_NAME }}.iso"
           sudo chown -R $USER:$USER "./${{ env.ISO_FILE_NAME }}.iso"
           ls -lh "${{ env.ISO_FILE_NAME }}.iso"
+      
+      
       
       
 
