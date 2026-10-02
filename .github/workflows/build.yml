@@ -112,22 +112,20 @@ jobs:
           echo "Pulling base image to local podman storage..."
           sudo podman pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-          # 3. 使用 Heredoc 写入仓库配置（避免 printf 转义错误）
-          # 注意：bootc-image-builder 规范使用 baseurl（单数），不用 baseurls（复数）
-          # GitHub Actions Runner 运行在美国 AWS 数据中心，只用全球 CDN 官方源
+          # 使用 Heredoc 写入仓库配置
+          # bootc-image-builder 规范使用 baseurls（复数数组），不是 baseurl（单数）
+          # GitHub Actions Runner 运行在美国 AWS 数据中心，使用 AlmaLinux 官方 CDN
           cat > config.json << 'EOF'
           {
             "customizations": {
               "repositories": [
                 {
-                  "baseurl": "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/",
-                  "check_gpg": false,
-                  "check_release": false
+                  "id": "baseos",
+                  "baseurls": ["https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/"]
                 },
                 {
-                  "baseurl": "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/",
-                  "check_gpg": false,
-                  "check_release": false
+                  "id": "appstream",
+                  "baseurls": ["https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/"]
                 }
               ]
             }
