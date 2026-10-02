@@ -380,92 +380,28 @@ jobs:
         if: steps.push-to-ghcr.outcome == 'success' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
           echo "Syncing OS image ${{ env.IMAGE_NAME }}:latest to Aliyun ACR..."
-          # 使用 podman pull/tag/push 替代 skopeo copy，避免 unexpected EOF 卡死
-          GHCR_IMG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-          ACR_IMG="${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest"
-          MAX_RETRIES=5
+          skopeo copy \
+            --src-creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
+            --dest-creds "${{ secrets.ALIYUN_ACR_USERNAME }}:${{ secrets.ALIYUN_ACR_PASSWORD }}" \
+            --dest-compress-format gzip \
+            --format v2s2 \
+            docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.IMAGE_NAME }}:latest
 
-          # Step 1a: Pull from GHCR (带超时和重试)
-          pull_ok=false
-          for i in $(seq 1 "$MAX_RETRIES"); do
-            echo "=== Pull from GHCR (attempt ${i}/${MAX_RETRIES}) ==="
-            if timeout 3600 podman pull "$GHCR_IMG"; then
-              pull_ok=true
-              break
-            fi
-            echo "Pull failed on attempt ${i}, retrying in 60s..."
-            sleep 60
-          done
-          if [ "$pull_ok" != "true" ]; then
-            echo "::error::Failed to pull ${GHCR_IMG} after ${MAX_RETRIES} attempts"
-            exit 1
-          fi
-
-          # Step 1b: Tag with ACR name
-          podman tag "$GHCR_IMG" "$ACR_IMG"
-
-          # Step 1c: Push to ACR (带超时和重试)
-          push_ok=false
-          for i in $(seq 1 "$MAX_RETRIES"); do
-            echo "=== Push to Aliyun ACR (attempt ${i}/${MAX_RETRIES}) ==="
-            if timeout 3600 podman push --creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" "$ACR_IMG"; then
-              push_ok=true
-              break
-            fi
-            echo "Push failed on attempt ${i}, retrying in 60s..."
-            sleep 60
-          done
-          if [ "$push_ok" != "true" ]; then
-            echo "::error::Failed to push ${ACR_IMG} after ${MAX_RETRIES} attempts"
-            exit 1
-          fi
-
-          echo "OS image synced to ${ACR_IMG} successfully"
       - name: Sync ISO Container Image to Aliyun ACR
         if: (steps.push-to-ghcr.outcome == 'success') && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
-          echo "Syncing ISO container image to Aliyun ACR..."
-          # 使用 podman pull/tag/push 替代 skopeo copy，避免 unexpected EOF 卡死
-          GHCR_IMG="${{ env.REGISTRY }}/${{ env.ISO_IMAGE_NAME }}:latest"
-          ACR_IMG="${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.ISO_IMAGE_NAME }}:latest"
-          MAX_RETRIES=5
-
-          # Step 2a: Pull from GHCR (带超时和重试)
-          pull_ok=false
-          for i in $(seq 1 "$MAX_RETRIES"); do
-            echo "=== Pull ISO image from GHCR (attempt ${i}/${MAX_RETRIES}) ==="
-            if timeout 3600 podman pull "$GHCR_IMG"; then
-              pull_ok=true
-              break
-            fi
-            echo "Pull failed on attempt ${i}, retrying in 60s..."
-            sleep 60
-          done
-          if [ "$pull_ok" != "true" ]; then
-            echo "::error::Failed to pull ${GHCR_IMG} after ${MAX_RETRIES} attempts"
-            exit 1
-          fi
-
-          # Step 2b: Tag with ACR name
-          podman tag "$GHCR_IMG" "$ACR_IMG"
-
-          # Step 2c: Push to ACR (带超时和重试)
-          push_ok=false
-          for i in $(seq 1 "$MAX_RETRIES"); do
-            echo "=== Push ISO image to Aliyun ACR (attempt ${i}/${MAX_RETRIES}) ==="
-            if timeout 3600 podman push --creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" "$ACR_IMG"; then
-              push_ok=true
-              break
-            fi
-            echo "Push failed on attempt ${i}, retrying in 60s..."
-            sleep 60
-          done
-          if [ "$push_ok" != "true" ]; then
-            echo "::error::Failed to push ${ACR_IMG} after ${MAX_RETRIES} attempts"
-            exit 1
-          fi
-
-          echo "ISO container image synced to ${ACR_IMG} successfully"
+          echo "Syncing ISO container image to Aliyun ACR via skopeo..."
+          skopeo copy \
+            --src-creds "${{ env.ACTOR_LOWER }}:${{ secrets.GITHUB_TOKEN }}" \
+            --dest-creds "${{ secrets.ALIYUN_ACR_USERNAME }}:${{ secrets.ALIYUN_ACR_PASSWORD }}" \
+            --dest-compress-format gzip \
+            --format v2s2 \
+            docker://${{ env.REGISTRY }}/${{ env.ISO_IMAGE_NAME }}:latest \
+            docker://${{ secrets.ALIYUN_ACR_REGISTRY }}/${{ env.ACTOR_LOWER }}/${{ env.ISO_IMAGE_NAME }}:latest
+      # =========================================================================
+      # 8. 清理 podman 认证文件权限（修复 logout 权限错误）
+      # =========================================================================
       - name: Cleanup podman auth permissions
         if: always()
         run: |
