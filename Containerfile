@@ -40,15 +40,17 @@ RUN dnf install -y \
     mesa-dri-drivers \
     open-vm-tools \
     open-vm-tools-desktop \
-    polkit-kde \
     plasma-workspace \
     plasma-desktop \
     plasma-firewall-firewalld \
+    polkit-kde \
+    python3 \
     qt6-qtimageformats \
     sddm \
     spectacle \
     syncthing \
     tilix \
+    uv \
     vlc \
     wqy-zenhei-fonts \
     xdg-desktop-portal \
